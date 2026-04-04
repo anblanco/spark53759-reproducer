@@ -41,7 +41,21 @@ which already has `outfile.flush()` in a `finally` block.
 from `site-packages`. To test the fix locally, use `scripts/apply_fix.py` which
 patches the zip-bundled copy.
 
-## Verification
+## Upstream fix
+
+Fixed in [PR #54458](https://github.com/apache/spark/pull/54458) (merged Feb 26, 2026
+to master). The fix is in `pyspark==4.2.0.dev3` but **not in any stable release** yet.
+
+| PySpark | Python 3.13 (Windows) | Fix present? |
+|---------|----------------------|-------------|
+| 3.5.5 | **FAIL** | No |
+| 4.0.0 | **FAIL** | No |
+| 4.1.1 | **FAIL** | No |
+| 4.2.0.dev1 | **FAIL** | No |
+| 4.2.0.dev2 | **FAIL** | No |
+| 4.2.0.dev3 | PASS | **Yes** |
+
+## Verification (manual patch)
 
 | Platform | Python | Unpatched | Patched |
 |----------|--------|-----------|---------|

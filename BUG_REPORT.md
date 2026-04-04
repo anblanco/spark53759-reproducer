@@ -16,6 +16,10 @@ The JVM sees `EOFException`.
 
 **One-line fix verified** across Python 3.11, 3.12, 3.13 on Windows and Linux.
 
+**Upstream fix**: [PR #54458](https://github.com/apache/spark/pull/54458) (merged
+Feb 26, 2026). Available in `pyspark==4.2.0.dev3`. Not in any stable release yet
+(3.5.8, 4.0.2, 4.1.1 are all affected).
+
 ## The Fix
 
 In [`python/pyspark/worker.py`](https://github.com/apache/spark/blob/master/python/pyspark/worker.py),
@@ -257,8 +261,9 @@ underlying socket has already been closed by the OS.
 - [Python `socket.makefile()`](https://docs.python.org/3/library/socket.html#socket.socket.makefile) — buffering semantics
 - [ESRI Knowledge Base](https://support.esri.com/en-us/knowledge-base/pyspark-crashes-with-python-3-12-on-windows-000039267) — confirms the issue in production
 
-## Workarounds (until fix is merged)
+## Workarounds (until fix reaches a stable release)
 
-1. **Use Python 3.11** — confirmed working across all PySpark versions
-2. **Use WSL/Linux** — the daemon path works on all Python versions
-3. **Patch pyspark.zip locally** — apply the one-line fix to the bundled worker.py
+1. **Install pyspark 4.2.0.dev3** — `pip install --pre pyspark==4.2.0.dev3` (fix included)
+2. **Use Python 3.11** — confirmed working across all PySpark versions
+3. **Use WSL/Linux** — the daemon path works on all Python versions
+4. **Patch pyspark.zip locally** — `python scripts/apply_fix.py --apply`
