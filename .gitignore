@@ -1,0 +1,10 @@
+python-installations/
+python-installers/
+venvs/
+.nox/
+upstream/
+_worker_instrument/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log

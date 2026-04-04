@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*reproduce.py*)",
+      "Bash(*test_spark53759.py*)",
+      "Bash(*scripts/*.py*)",
+      "Bash(*python-installations*)",
+      "Bash(nox *)",
+      "Bash(git *)"
+    ]
+  }
+}
