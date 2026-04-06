@@ -62,3 +62,41 @@ def test_udf(spark):
     str_udf = udf(lambda x: f"val_{x}", StringType())
     rows = spark.range(5).withColumn("x", str_udf("id")).collect()
     assert len(rows) == 5
+
+
+# --- Python Data Source API (Spark 4.0+) ---
+
+
+def _has_datasource_api():
+    try:
+        from pyspark.sql.datasource import DataSource, DataSourceReader  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _has_datasource_api(), reason="DataSource API requires PySpark 4.0+")
+def test_datasource_read(spark):
+    """Python Data Source read — exercises create_data_source + plan_data_source_read workers."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+
+    class TestReader(DataSourceReader):
+        def read(self, partition):
+            yield (0, "a")
+            yield (1, "b")
+
+    class TestDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "test_53759"
+
+        def schema(self):
+            return "id INT, value STRING"
+
+        def reader(self, schema):
+            return TestReader()
+
+    spark.dataSource.register(TestDataSource)
+    rows = spark.read.format("test_53759").load().collect()
+    assert len(rows) == 2

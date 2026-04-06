@@ -5,46 +5,50 @@ Reproducer, root cause analysis, and verified fix for
 
 ## Root cause
 
-`worker.py`'s `__main__` block is missing an explicit `sock_file.flush()` after
-`main()` returns. The daemon path (`daemon.py`) has this flush in a `finally`
-block; the simple-worker path does not.
+On Python 3.12+, the simple-worker (non-daemon) path crashes with
+`EOFException` because the worker socket is not explicitly closed before the
+process exits. Windows always uses this path; Linux/macOS use it when
+`spark.python.use.daemon=false`.
 
-On Python 3.12+, changed GC/finalization ordering
-([gh-97922](https://github.com/python/cpython/issues/97922)) causes the socket
-to close before `BufferedRWPair.__del__` can flush the write buffer. Buffered
-task results are lost. The JVM sees `EOFException`.
+Changed GC finalization ordering in CPython 3.12+
+([gh-97922](https://github.com/python/cpython/issues/97922)) can close the
+underlying raw socket before `BufferedRWPair.__del__` runs. When
+`BufferedRWPair` finally tries to flush its write buffer during cleanup, the
+socket is already dead — buffered task results are lost and the JVM sees
+`EOFException`.
 
-## The fix (one line)
+This affects **all** Python worker files, not just `worker.py`. The Python Data
+Source API workers (introduced in Spark 4.0) have the same bare
+`main(sock_file, sock_file)` without explicit close, and are equally vulnerable.
 
-In `python/pyspark/worker.py`, replace:
+## The fix
 
-```python
-    main(sock_file, sock_file)
-```
-
-with:
+Wrap `main()` in `try/finally` with an explicit `sock_file.close()` in every
+worker file's `__main__` block:
 
 ```python
     try:
         main(sock_file, sock_file)
     finally:
-        try:
-            sock_file.flush()
-        except Exception:
-            pass
+        sock_file.close()
 ```
 
-This mirrors [`daemon.py`'s `worker()` function](https://github.com/apache/spark/blob/master/python/pyspark/daemon.py#L91)
-which already has `outfile.flush()` in a `finally` block.
+`close()` is semantically correct — it explicitly tears down the socket before
+GC can interfere, and internally calls `flush()`. This matches how
+[PR #54458](https://github.com/apache/spark/pull/54458) solved it on master
+via a context manager with `close()` in the `finally` block.
 
-**Note:** The JVM loads `worker.py` from `pyspark/python/lib/pyspark.zip`, not
+**Note:** The JVM loads worker files from `pyspark/python/lib/pyspark.zip`, not
 from `site-packages`. To test the fix locally, use `scripts/apply_fix.py` which
-patches the zip-bundled copy.
+patches all worker files in the zip.
 
 ## Upstream fix
 
-Fixed in [PR #54458](https://github.com/apache/spark/pull/54458) (merged Feb 26, 2026
-to master). The fix is in `pyspark==4.2.0.dev3` but **not in any stable release** yet.
+Fixed on master in [PR #54458](https://github.com/apache/spark/pull/54458)
+(merged Feb 26, 2026) via a context manager refactoring. Backport for stable
+branches proposed in [PR #55201](https://github.com/apache/spark/pull/55201).
+
+The fix is in `pyspark==4.2.0.dev3` but **not in any stable release** yet.
 
 | PySpark | Python 3.13 (Windows) | Fix present? |
 |---------|----------------------|-------------|
@@ -69,6 +73,7 @@ to master). The fix is in `pyspark==4.2.0.dev3` but **not in any stable release*
 - **Python 3.12+** (the bug doesn't manifest on 3.11)
 - **Java 17+** on PATH (`java -version` should work)
 - **pip** (to install pyspark)
+- **pyarrow** (required for Data Source API tests on PySpark 4.0+)
 
 ## Quick reproduction
 
@@ -80,13 +85,15 @@ python reproduce.py
 ## Running the tests
 
 ```bash
-pip install pyspark pytest
+pip install pyspark pytest pyarrow
 pytest test_spark53759.py -v
 ```
 
 Expected on Python 3.12+ with `daemon=false`:
 - `test_spark_range` and `test_rdd_collect` PASS (no worker needed)
 - `test_rdd_map`, `test_create_dataframe`, `test_udf` **FAIL** (worker crashes)
+- `test_datasource_read` **FAIL** on PySpark 4.0+ (data source worker crashes),
+  SKIP on PySpark 3.x (DataSource API not available)
 
 ## Full version matrix
 
@@ -102,7 +109,7 @@ nox -p 3.13      # single Python version
 
 ```bash
 python scripts/apply_fix.py --apply     # patch pyspark.zip for the current interpreter
-pytest test_spark53759.py -v             # all 5 pass
+pytest test_spark53759.py -v             # all tests pass
 python scripts/apply_fix.py --revert    # restore original
 ```
 
@@ -111,9 +118,9 @@ python scripts/apply_fix.py --revert    # restore original
 | File | Description |
 |------|-------------|
 | `reproduce.py` | Minimal one-file reproducer |
-| `test_spark53759.py` | Pytest suite: 5 tests from JVM-only to worker-dependent |
+| `test_spark53759.py` | Pytest suite: 6 tests from JVM-only to worker-dependent |
 | `noxfile.py` | Test matrix across Python x PySpark versions via nox |
-| `scripts/apply_fix.py` | Apply/revert the flush fix to pyspark.zip |
+| `scripts/apply_fix.py` | Apply/revert the close fix to all workers in pyspark.zip |
 | `scripts/diagnose.py` | Pure-Python mock of createSimpleWorker |
 | `scripts/patch_zip.py` | Instrument worker.py inside pyspark.zip with logging |
 | `scripts/wsl_patch_and_test.py` | Apply fix and test inside WSL Linux |
@@ -122,6 +129,6 @@ python scripts/apply_fix.py --revert    # restore original
 
 ## Contributing upstream
 
-PR format for apache/spark: `[SPARK-53759][PYTHON] Fix missing flush in simple-worker path`
+Backport PR: `[SPARK-53759][PYTHON][4.1] Fix missing close in simple-worker path`
 
 See [BUG_REPORT.md](BUG_REPORT.md) for the full analysis, references, and proposed change.

@@ -1,8 +1,10 @@
 """
-Apply the SPARK-53759 flush fix to pyspark.zip for any Python version.
+Apply the SPARK-53759 close fix to pyspark.zip for any Python version.
 
-The fix: wrap main() in try/finally with an explicit sock_file.flush().
-This mirrors daemon.py's worker() function which already has this flush.
+The fix: wrap main() in try/finally with an explicit sock_file.close()
+in every worker file. close() is semantically correct — it explicitly
+tears down the socket before GC can interfere, and internally calls
+flush(). This matches how PR #54458 solved it on master.
 
 Verified results:
   - Python 3.11.9  Windows: PASS (harmless, already worked)
@@ -35,21 +37,13 @@ def find_zip(py):
     return Path(r.stdout.strip()).parent / "python" / "lib" / "pyspark.zip"
 
 
-OLD = (
-    "    main(sock_file, sock_file)"
-)
+OLD = "    main(sock_file, sock_file)"
 
 NEW = (
     "    try:\n"
     "        main(sock_file, sock_file)\n"
     "    finally:\n"
-    "        # SPARK-53759: explicit flush before exit to prevent data loss\n"
-    "        # from BufferedRWPair cleanup race on Python 3.12+ Windows.\n"
-    "        # Mirrors the flush in daemon.py's worker() finally block.\n"
-    "        try:\n"
-    "            sock_file.flush()\n"
-    "        except Exception:\n"
-    "            pass"
+    "        sock_file.close()"
 )
 
 
@@ -64,23 +58,27 @@ def apply_patch(python_exe):
         names = z.namelist()
         contents = {n: z.read(n) for n in names}
 
-    orig = contents["pyspark/worker.py"].decode()
-    if "SPARK-53759" in orig:
-        print("Already patched")
-        return True
+    patched_count = 0
+    for name in names:
+        if not name.endswith(".py"):
+            continue
+        text = contents[name].decode(errors="ignore")
+        if OLD not in text:
+            continue
+        contents[name] = text.replace(OLD, NEW, 1).encode()
+        patched_count += 1
+        print(f"  Patched: {name}")
 
-    patched = orig.replace(OLD, NEW)
-    if patched == orig:
-        print("Could not find patch target — worker.py may have changed upstream")
+    if patched_count == 0:
+        print("Could not find patch target — worker files may have changed upstream")
         return False
 
-    contents["pyspark/worker.py"] = patched.encode()
     tmp = zp.with_suffix(".zip.tmp")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for n in names:
             z.writestr(n, contents[n])
     tmp.replace(zp)
-    print("Applied: try/finally flush after main()")
+    print(f"Applied: try/finally close() in {patched_count} worker file(s)")
     return True
 
 
